@@ -1,33 +1,33 @@
 #include <Unistep2.h>
 #include <WiFiManager.h>
 #include <ArduinoOTA.h>
-#include <Servo.h>
-
-static const uint8_t D0   = 16;
-static const uint8_t D1   = 5;
-static const uint8_t D2   = 4;
-static const uint8_t D3   = 0;
-static const uint8_t D4   = 2;
-static const uint8_t D5   = 14;
-static const uint8_t D6   = 12;
-static const uint8_t D7   = 13;
-static const uint8_t D8   = 15;
-static const uint8_t D9   = 3;
-static const uint8_t D10  = 1;
+#include <WS2812FX.h>
+#include "Timer.h"
 
 const int stepsPerRevolution = 4096;
+#define LED_COUNT 60
+#define INPUT_PIN 13
+#define OUTPUT_PIN 12
+#define LED_PIN 14
 
 // Wiring diagram http://arduino.esp8266.com/Arduino/versions/2.3.0/doc/boards.html
 
+Timer waitAtBottomTimer(5000);
 WiFiManager wifiManager;
-Unistep2 stepper(D1, D2, D4, D3, stepsPerRevolution, 1250); // pins for IN1, IN2, IN3, IN4, steps per rev, step delay(in micros)
-Servo servo;
+Unistep2 stepper(5, 4, 2, 0, stepsPerRevolution, 1250); // pins for IN1, IN2, IN3, IN4, steps per rev, step delay(in micros)
+WS2812FX ws2812fx = WS2812FX(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 void setup() {
-  servo.attach(D8);
-  servo.write(90);
-  
   Serial.begin(115200);
+
+  pinMode(INPUT_PIN, INPUT);
+  pinMode(OUTPUT_PIN, OUTPUT);
+
+  ws2812fx.init();
+  ws2812fx.setBrightness(50);
+  ws2812fx.setSpeed(25000);
+  ws2812fx.setColor(WHITE);
+  ws2812fx.setMode(FX_MODE_CHASE_RAINBOW_WHITE);
   
   connectToWifi();
   configureOTA();
@@ -35,7 +35,7 @@ void setup() {
 
 void configureOTA() {
   // Make sure the flash size matches. For ESP8266 12F it should be 4MB.
-  ArduinoOTA.setHostname("wonka");
+  ArduinoOTA.setHostname("wonkalift");
   
   ArduinoOTA.onStart([]() {
     String type;
@@ -73,13 +73,50 @@ void connectToWifi() {
   wifiManager.autoConnect("wonkamobile");
 }
 
-bool isOpen = false;
+bool isMovingDown = false;
+bool isMovingUp = false;
 
 void loop() {
   ArduinoOTA.handle();
   stepper.run();
+  ws2812fx.service();
 
-  if (stepper.stepsToGo() == 0) { // If stepsToGo returns 0 the stepper is not moving
-   stepper.move(10);
+  if (!isMovingDown && !isMovingUp && digitalRead(INPUT_PIN) == HIGH) {
+    ws2812fx.setSpeed(25000);
+    ws2812fx.setColor(WHITE);
+    ws2812fx.setMode(FX_MODE_CHASE_RAINBOW_WHITE);
+    ws2812fx.start();
+
+    digitalWrite(OUTPUT_PIN, HIGH);
+
+    isMovingDown = true;
+    Serial.println("Moving down");
+    stepper.move(-20000);
+  }
+
+  if (isMovingDown && stepper.stepsToGo() == 0 && !waitAtBottomTimer.IsRunning()) {
+    waitAtBottomTimer.Start();
+    ws2812fx.setColor(PINK);
+    ws2812fx.setSpeed(1);
+    ws2812fx.setMode(FX_MODE_BREATH);
+    ws2812fx.start();
+    
+    Serial.println("At bottom, waiting...");
+  }
+
+  if (waitAtBottomTimer.Check()) {
+    waitAtBottomTimer.Stop();
+    stepper.move(20000);
+    isMovingDown = false;
+    isMovingUp = true;
+    ws2812fx.stop();
+    Serial.println("Moving up");
+  }
+
+  if (isMovingUp && stepper.stepsToGo() == 0) {
+    isMovingUp = false;
+    Serial.println("At top, waiting");
+    digitalWrite(OUTPUT_PIN, LOW);
+    ws2812fx.stop();
   }
 }
